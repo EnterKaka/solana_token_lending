@@ -10,7 +10,7 @@ use crate::{
         CalculateBorrowResult, CalculateLiquidationResult, CalculateRepayResult,
         InitLendingMarketParams, InitObligationParams, InitReserveParams, LendingMarket,
         NewReserveCollateralParams, NewReserveLiquidityParams, Obligation, Reserve,
-        ReserveCollateral, ReserveConfig, ReserveLiquidity,
+        ReserveCollateral, ReserveConfig, ReserveLiquidity, LockData, LOCK_DURATION
     },
 };
 use num_traits::FromPrimitive;
@@ -25,6 +25,7 @@ use solana_program::{
     program_pack::{IsInitialized, Pack},
     pubkey::Pubkey,
     sysvar::{clock::Clock, rent::Rent, Sysvar},
+    borsh::try_from_slice_unchecked,
 };
 use spl_token::solana_program::instruction::AccountMeta;
 use spl_token::state::{Account, Mint};
@@ -32,7 +33,7 @@ use std::{convert::TryInto, result::Result};
 use switchboard_program::{
     get_aggregator, get_aggregator_result, AggregatorState, RoundResult, SwitchboardAccountType,
 };
-
+use borsh::{BorshSerialize,BorshDeserialize};
 /// Processes an instruction
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -124,6 +125,14 @@ pub fn process_instruction(
         LendingInstruction::UpdateReserveConfig { config } => {
             msg!("Instruction: UpdateReserveConfig");
             process_update_reserve_config(program_id, config, accounts)
+        }
+        LendingInstruction::LockObligationCollateral {lock_amount} =>{
+            msg!("Instruction : Lock Obligation Collateral");
+            process_lock_obligation_collateral(program_id, lock_amount, accounts)
+        }
+        LendingInstruction::UnlockObligationCollateral => {
+            msg!("Instruction : Unlock obligation Collateral");
+            process_unlock_obligation_collateral(program_id,accounts)
         }
     }
 }
@@ -965,7 +974,6 @@ fn _deposit_obligation_collateral<'a>(
         msg!("Obligation owner provided must be a signer");
         return Err(LendingError::InvalidSigner.into());
     }
-
     obligation
         .find_or_add_collateral_to_deposits(*deposit_reserve_info.key)?
         .deposit(collateral_amount)?;
@@ -980,6 +988,240 @@ fn _deposit_obligation_collateral<'a>(
         authority_signer_seeds: &[],
         token_program: token_program_id.clone(),
     })?;
+
+    Ok(())
+}
+
+#[inline(never)]
+fn process_lock_obligation_collateral(
+    program_id : &Pubkey,
+    lock_amount : u64,
+    accounts : &[AccountInfo],
+) -> ProgramResult {
+    if lock_amount == 0 {
+        msg!("Lock amount provided cannot be zero");
+        return Err(LendingError::InvalidAmount.into());
+    }
+
+    let account_info_iter = &mut accounts.iter();
+    let lock_ledge_info = next_account_info(account_info_iter)?;
+    let lock_reserve_info = next_account_info(account_info_iter)?;
+    let obligation_info = next_account_info(account_info_iter)?;
+    let lending_market_info = next_account_info(account_info_iter)?;
+    let obligation_owner_info = next_account_info(account_info_iter)?;
+    let clock = &Clock::from_account_info(next_account_info(account_info_iter)?)?;
+    _lock_obligation_collateral(
+        program_id,
+        lock_amount,
+        lock_ledge_info,
+        lock_reserve_info,
+        obligation_info,
+        lending_market_info,
+        obligation_owner_info,
+        clock,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn _lock_obligation_collateral<'a>(
+    program_id : &Pubkey,
+    lock_amount : u64,
+    lock_ledge_info : &AccountInfo<'a>,
+    lock_reserve_info : &AccountInfo<'a>,
+    obligation_info: &AccountInfo<'a>,
+    lending_market_info: &AccountInfo<'a>,
+    obligation_owner_info: &AccountInfo<'a>,
+    clock: &Clock,
+) -> ProgramResult {
+    let lending_market = LendingMarket::unpack(&lending_market_info.data.borrow())?;
+    if lending_market_info.owner != program_id {
+        msg!("Lending market provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    let lock_reserve = Reserve::unpack(&lock_reserve_info.data.borrow())?;
+    if lock_reserve_info.owner != program_id {
+        msg!("Lock reserve provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    if &lock_reserve.lending_market != lending_market_info.key {
+        msg!("Lock reserve lending market does not match the lending market provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    let mut obligation = Obligation::unpack(&obligation_info.data.borrow())?;
+    if obligation_info.owner != program_id {
+        msg!("Obligation provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    if &obligation.lending_market != lending_market_info.key {
+        msg!("Obligation lending market does not match the lending market provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    if &obligation.owner != obligation_owner_info.key {
+        msg!("Obligation owner does not match the obligation owner provided");
+        return Err(LendingError::InvalidObligationOwner.into());
+    }
+    if !obligation_owner_info.is_signer {
+        msg!("Obligation owner provided must be a signer");
+        return Err(LendingError::InvalidSigner.into());
+    }
+    let mut lock_data = LockData::from_account_info(lock_ledge_info)?;
+    lock_data.owner = *obligation_owner_info.key;
+    lock_data.lock_reserve = *lock_reserve_info.key;
+    lock_data.slot = clock.unix_timestamp + LOCK_DURATION;
+
+    let (collateral, collateral_index) =
+        obligation.find_collateral_in_deposits(*lock_reserve_info.key)?;
+    obligation.lock(lock_amount,collateral_index)?;
+    Obligation::pack(obligation, &mut obligation_info.data.borrow_mut())?;
+    lock_data.amount = lock_amount;
+    lock_data.serialize(&mut *lock_ledge_info.data.borrow_mut())?;
+
+    Ok(())
+}
+
+#[inline(never)]
+fn process_unlock_obligation_collateral(
+    program_id : &Pubkey,
+    accounts : &[AccountInfo],
+    ) -> ProgramResult {
+    let account_info_iter = &mut accounts.iter();
+    let source_collateral_info = next_account_info(account_info_iter)?;
+    let destination_collateral_info = next_account_info(account_info_iter)?;
+    let unlock_ledge_info = next_account_info(account_info_iter)?;
+    let unlock_reserve_info = next_account_info(account_info_iter)?;
+    let obligation_info = next_account_info(account_info_iter)?;
+    let lending_market_info = next_account_info(account_info_iter)?;
+    let lending_market_authority_info = next_account_info(account_info_iter)?;
+    let obligation_owner_info = next_account_info(account_info_iter)?;
+    let clock = &Clock::from_account_info(next_account_info(account_info_iter)?)?;
+    let token_program_id = next_account_info(account_info_iter)?;
+    _unlock_obligation_collateral(
+        program_id,
+        source_collateral_info,
+        destination_collateral_info,
+        unlock_ledge_info,
+        unlock_reserve_info,
+        obligation_info,
+        lending_market_info,
+        lending_market_authority_info,
+        obligation_owner_info,
+        clock,
+        token_program_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn _unlock_obligation_collateral<'a>(
+    program_id : &Pubkey,
+    source_collateral_info : &AccountInfo<'a>,
+    destination_collateral_info : &AccountInfo<'a>,
+    unlock_ledge_info : &AccountInfo<'a>,
+    unlock_reserve_info : &AccountInfo<'a>,
+    obligation_info: &AccountInfo<'a>,
+    lending_market_info: &AccountInfo<'a>,
+    lending_market_authority_info: &AccountInfo<'a>,
+    obligation_owner_info: &AccountInfo<'a>,
+    clock: &Clock,
+    token_program_id: &AccountInfo<'a>,
+) -> ProgramResult {
+    let lending_market = LendingMarket::unpack(&lending_market_info.data.borrow())?;
+    if lending_market_info.owner != program_id {
+        msg!("Lending market provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    if &lending_market.token_program_id != token_program_id.key {
+        msg!("Lending market token program does not match the token program provided");
+        return Err(LendingError::InvalidTokenProgram.into());
+    }
+    
+    let unlock_reserve = Reserve::unpack(&unlock_reserve_info.data.borrow())?;
+    if unlock_reserve_info.owner != program_id {
+        msg!("unlock reserve provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    if &unlock_reserve.lending_market != lending_market_info.key {
+        msg!("unlock reserve lending market does not match the lending market provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    if &unlock_reserve.collateral.supply_pubkey != source_collateral_info.key {
+        msg!("unlock reserve collateral supply must be used as the source collateral provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    if &unlock_reserve.collateral.supply_pubkey == destination_collateral_info.key {
+        msg!("unlock reserve collateral supply cannot be used as the destination collateral provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    
+    let mut obligation = Obligation::unpack(&obligation_info.data.borrow())?;
+    if obligation_info.owner != program_id {
+        msg!("Obligation provided is not owned by the lending program");
+        return Err(LendingError::InvalidAccountOwner.into());
+    }
+    if &obligation.lending_market != lending_market_info.key {
+        msg!("Obligation lending market does not match the lending market provided");
+        return Err(LendingError::InvalidAccountInput.into());
+    }
+    if &obligation.owner != obligation_owner_info.key {
+        msg!("Obligation owner does not match the obligation owner provided");
+        return Err(LendingError::InvalidObligationOwner.into());
+    }
+    if !obligation_owner_info.is_signer {
+        msg!("Obligation owner provided must be a signer");
+        return Err(LendingError::InvalidSigner.into());
+    }
+
+    let mut unlock_data = LockData::from_account_info(unlock_ledge_info)?;
+    if unlock_data.owner != *obligation_owner_info.key{
+        msg!("Unlocking account owner does not match");
+        return Err(LendingError::InvalidLockAccountOwner.into());
+    }
+    if unlock_data.lock_reserve != *unlock_reserve_info.key{
+        msg!("Unlocking account reserve does not match");
+        return Err(LendingError::InvlaidReserve.into());
+    }
+    if unlock_data.amount == 0 {
+        msg!("Unlocked amount is zero");
+        return Err(LendingError::InvalidAmount.into());
+    }
+    
+    let (collateral, collateral_index) =
+        obligation.find_collateral_in_deposits(*unlock_reserve_info.key)?;
+    
+    if unlock_data.slot > clock.unix_timestamp {
+        let team_amount = unlock_data.amount * 3 / 10;
+
+        let authority_signer_seeds = &[
+            lending_market_info.key.as_ref(),
+            &[lending_market.bump_seed],
+        ];
+        let lending_market_authority_pubkey =
+            Pubkey::create_program_address(authority_signer_seeds, program_id)?;
+        if &lending_market_authority_pubkey != lending_market_authority_info.key {
+            msg!(
+                "Derived lending market authority does not match the lending market authority provided"
+            );
+            return Err(LendingError::InvalidMarketAuthority.into());
+        }
+
+
+
+        spl_token_transfer(TokenTransferParams {
+            source: source_collateral_info.clone(),
+            destination: destination_collateral_info.clone(),
+            amount: team_amount,
+            authority: lending_market_authority_info.clone(),
+            authority_signer_seeds,
+            token_program: token_program_id.clone(),
+        })?;        
+
+        obligation.unlock(false,unlock_data.amount,collateral_index)?;
+        obligation.withdraw(team_amount,collateral_index)?;
+    } else {
+        obligation.unlock(true,unlock_data.amount, collateral_index)?;
+    }
+    Obligation::pack(obligation,&mut obligation_info.data.borrow_mut())?;
+    unlock_data.amount=0;
+    unlock_data.serialize(&mut *unlock_ledge_info.data.borrow_mut())?;
 
     Ok(())
 }

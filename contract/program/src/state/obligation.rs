@@ -90,6 +90,18 @@ impl Obligation {
         Ok(())
     }
 
+    pub fn lock(&mut self, lock_amount: u64, collateral_index:usize) -> ProgramResult {
+        let collateral = &mut self.deposits[collateral_index];
+        collateral.lock(lock_amount)?;
+        Ok(())
+    }
+
+    pub fn unlock(&mut self, potential: bool, unlock_amount:u64, collateral_index:usize) -> ProgramResult {
+        let collateral = &mut self.deposits[collateral_index];
+        collateral.unlock(potential, unlock_amount)?;
+        Ok(())
+    }
+
     /// Calculate the maximum collateral value that can be withdrawn
     pub fn max_withdraw_value(&self) -> Result<Decimal, ProgramError> {
         let required_deposit_value = self
@@ -232,6 +244,10 @@ pub struct ObligationCollateral {
     pub deposit_reserve: Pubkey,
     /// Amount of collateral deposited
     pub deposited_amount: u64,
+    /// Amount of collateral locked
+    pub locked_amount : u64,
+    /// Amount of collateral unlocked after 90 days
+    pub unlocked_amount : u64,
     /// Collateral market value in quote currency
     pub market_value: Decimal,
 }
@@ -242,6 +258,8 @@ impl ObligationCollateral {
         Self {
             deposit_reserve,
             deposited_amount: 0,
+            locked_amount : 0,
+            unlocked_amount : 0,
             market_value: Decimal::zero(),
         }
     }
@@ -257,10 +275,45 @@ impl ObligationCollateral {
 
     /// Decrease deposited collateral
     pub fn withdraw(&mut self, collateral_amount: u64) -> ProgramResult {
+        if (self.deposited_amount - self.locked_amount) < collateral_amount {
+            msg!("Withdrawing amount is invalid.");
+            return Err(LendingError::InvalidAmount.into());
+        }
+        if (self.deposited_amount - self.locked_amount - self.unlocked_amount) < collateral_amount {
+            self.unlocked_amount = self.deposited_amount - self.locked_amount - collateral_amount;
+        }
         self.deposited_amount = self
             .deposited_amount
             .checked_sub(collateral_amount)
             .ok_or(LendingError::MathOverflow)?;
+        Ok(())
+    }
+
+    pub fn lock(&mut self, lock_amount : u64) -> ProgramResult {
+        if (self.deposited_amount - self.locked_amount - self.unlocked_amount) < lock_amount {
+            msg!("Locking amount is invalid.");
+            return Err(LendingError::InvalidAmount.into());
+        }
+        self.locked_amount = self
+            .locked_amount
+            .checked_add(lock_amount)
+            .ok_or(LendingError::MathOverflow)?;
+        Ok(())
+    }
+
+    pub fn unlock(&mut self, potential:bool, unlock_amount : u64) -> ProgramResult {
+        if self.locked_amount < unlock_amount {
+            msg!("Unlocking amount is invalid");
+            return Err(LendingError::InvalidAmount.into());
+        }
+        self.locked_amount = self.locked_amount
+            .checked_sub(unlock_amount)
+            .ok_or(LendingError::MathOverflow)?;
+        if potential {
+            self.unlocked_amount = self.unlocked_amount
+                .checked_add(unlock_amount)
+                .ok_or(LendingError::MathOverflow)?;
+        }
         Ok(())
     }
 }
@@ -325,9 +378,9 @@ impl ObligationLiquidity {
     }
 }
 
-const OBLIGATION_COLLATERAL_LEN: usize = 88; // 32 + 8 + 16 + 32
+const OBLIGATION_COLLATERAL_LEN: usize = 104; // 32 + 8 + 8 + 8 + 16 + 32
 const OBLIGATION_LIQUIDITY_LEN: usize = 112; // 32 + 16 + 16 + 16 + 32
-const OBLIGATION_LEN: usize = 1300; // 1 + 8 + 1 + 32 + 32 + 16 + 16 + 16 + 16 + 64 + 1 + 1 + (88 * 1) + (112 * 9)
+const OBLIGATION_LEN: usize = 2364; // 1 + 8 + 1 + 32 + 32 + 16 + 16 + 16 + 16 + 64 + 1 + 1 + (104 * 10) + (112 * 10)
                                     // @TODO: break this up by obligation / collateral / liquidity https://git.io/JOCca
 impl Pack for Obligation {
     const LEN: usize = OBLIGATION_LEN;
@@ -363,7 +416,7 @@ impl Pack for Obligation {
             64,
             1,
             1,
-            OBLIGATION_COLLATERAL_LEN + (OBLIGATION_LIQUIDITY_LEN * (MAX_OBLIGATION_RESERVES - 1))
+            OBLIGATION_COLLATERAL_LEN * MAX_OBLIGATION_RESERVES + OBLIGATION_LIQUIDITY_LEN * MAX_OBLIGATION_RESERVES
         ];
 
         // obligation
@@ -385,8 +438,8 @@ impl Pack for Obligation {
         for collateral in &self.deposits {
             let deposits_flat = array_mut_ref![data_flat, offset, OBLIGATION_COLLATERAL_LEN];
             #[allow(clippy::ptr_offset_with_cast)]
-            let (deposit_reserve, deposited_amount, market_value, _padding_deposit) =
-                mut_array_refs![deposits_flat, PUBKEY_BYTES, 8, 16, 32];
+            let (deposit_reserve, deposited_amount, locked_amount, unlocked_amount, market_value, _padding_deposit) =
+                mut_array_refs![deposits_flat, PUBKEY_BYTES, 8, 8, 8, 16, 32];
             deposit_reserve.copy_from_slice(collateral.deposit_reserve.as_ref());
             *deposited_amount = collateral.deposited_amount.to_le_bytes();
             pack_decimal(collateral.market_value, market_value);
@@ -447,7 +500,7 @@ impl Pack for Obligation {
             64,
             1,
             1,
-            OBLIGATION_COLLATERAL_LEN + (OBLIGATION_LIQUIDITY_LEN * (MAX_OBLIGATION_RESERVES - 1))
+            OBLIGATION_COLLATERAL_LEN * MAX_OBLIGATION_RESERVES + OBLIGATION_LIQUIDITY_LEN * MAX_OBLIGATION_RESERVES
         ];
 
         let version = u8::from_le_bytes(*version);
@@ -465,11 +518,13 @@ impl Pack for Obligation {
         for _ in 0..deposits_len {
             let deposits_flat = array_ref![data_flat, offset, OBLIGATION_COLLATERAL_LEN];
             #[allow(clippy::ptr_offset_with_cast)]
-            let (deposit_reserve, deposited_amount, market_value, _padding_deposit) =
-                array_refs![deposits_flat, PUBKEY_BYTES, 8, 16, 32];
+            let (deposit_reserve, deposited_amount, locked_amount, unlocked_amount, market_value, _padding_deposit) =
+                array_refs![deposits_flat, PUBKEY_BYTES, 8, 8, 8, 16, 32];
             deposits.push(ObligationCollateral {
                 deposit_reserve: Pubkey::new(deposit_reserve),
                 deposited_amount: u64::from_le_bytes(*deposited_amount),
+                locked_amount: u64::from_le_bytes(*locked_amount),
+                unlocked_amount: u64::from_le_bytes(*unlocked_amount),
                 market_value: unpack_decimal(market_value),
             });
             offset += OBLIGATION_COLLATERAL_LEN;

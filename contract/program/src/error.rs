@@ -163,6 +163,10 @@ pub enum LendingError {
     /// Null oracle config
     #[error("Null oracle config")]
     NullOracleConfig,
+    #[error("Invalid lock account owner")]
+    InvalidLockAccountOwner,
+    #[error("Invalid Reserve")]
+    InvlaidReserve,
 }
 
 impl From<LendingError> for ProgramError {

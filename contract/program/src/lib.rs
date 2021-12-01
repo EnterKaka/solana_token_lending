@@ -1,5 +1,3 @@
-#![deny(missing_docs)]
-
 //! A lending program for the Solana blockchain.
 
 pub mod entrypoint;

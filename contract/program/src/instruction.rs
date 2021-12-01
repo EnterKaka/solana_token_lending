@@ -379,6 +379,15 @@ pub enum LendingInstruction {
         /// Reserve config to update to
         config: ReserveConfig,
     },
+
+    ///17
+    /// Lock a reserve
+    LockObligationCollateral {
+        /// Amount of collateral to lock
+        lock_amount : u64,
+    },
+
+    UnlockObligationCollateral,
 }
 
 impl LendingInstruction {
@@ -514,6 +523,11 @@ impl LendingInstruction {
                     },
                 }
             }
+            17 => {
+                let (lock_amount, _rest) = Self::unpack_u64(rest)?;
+                Self::LockObligationCollateral {lock_amount}
+            }
+            18 =>Self::UnlockObligationCollateral,
             _ => {
                 msg!("Instruction cannot be unpacked");
                 return Err(LendingError::InstructionUnpackError.into());
@@ -691,6 +705,13 @@ impl LendingInstruction {
                 buf.extend_from_slice(&config.deposit_limit.to_le_bytes());
                 buf.extend_from_slice(&config.borrow_limit.to_le_bytes());
                 buf.extend_from_slice(&config.fee_receiver.to_bytes());
+            }
+            Self::LockObligationCollateral { lock_amount } => {
+                buf.push(17);
+                buf.extend_from_slice(&lock_amount.to_le_bytes());
+            }
+            Self::UnlockObligationCollateral =>{
+                buf.push(18);
             }
         }
         buf

@@ -1,4 +1,3 @@
-//! State types
 
 mod last_update;
 mod lending_market;
@@ -11,7 +10,8 @@ pub use obligation::*;
 pub use reserve::*;
 
 use crate::math::{Decimal, WAD};
-use solana_program::{msg, program_error::ProgramError};
+use solana_program::{msg, program_error::ProgramError, account_info::AccountInfo, borsh::try_from_slice_unchecked,pubkey::Pubkey,};
+use borsh::{BorshSerialize,BorshDeserialize};
 
 /// Collateral tokens are initially valued at a ratio of 5:1 (collateral:liquidity)
 // @FIXME: restore to 5
@@ -28,6 +28,24 @@ pub const UNINITIALIZED_VERSION: u8 = 0;
 /// Number of slots per year
 // 2 (slots per second) * 60 * 60 * 24 * 365 = 63072000
 pub const SLOTS_PER_YEAR: u64 = 63072000;
+
+pub const LOCK_DURATION: i64 = 90*24*60*60;
+
+#[repr(C)]
+#[derive(Clone, BorshSerialize, BorshDeserialize, Debug)]
+pub struct LockData {
+    pub owner: Pubkey,
+    pub lock_reserve : Pubkey,
+    pub amount : u64,
+    pub slot : i64,
+}
+
+impl LockData {
+    pub fn from_account_info(a: &AccountInfo) -> Result<LockData, ProgramError> {
+        let ld : LockData = try_from_slice_unchecked(&a.data.borrow_mut())?;
+        Ok(ld)
+    }
+}
 
 // Helpers
 fn pack_decimal(decimal: Decimal, dst: &mut [u8; 16]) {
