@@ -871,7 +871,7 @@ fn command_add_reserve(
 
     let reserve_balance = config
         .rpc_client
-        .get_minimum_balance_for_rent_exemption(Reserve::LEN)?;
+        .get_minimum_balance_for_rent_exemption(Reserve::LEN+100)?;
     let collateral_mint_balance = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(Mint::LEN)?;

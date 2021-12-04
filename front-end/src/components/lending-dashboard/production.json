@@ -1,0 +1,57 @@
+{
+	"programID" : "GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W",
+	"assets" : [
+        {
+            "name": "Solana",
+            "symbol": "SOL",
+            "decimals": 9,
+            "mintAddress": "So11111111111111111111111111111111111111112"
+        },
+        {
+            "name": "USDC",
+            "symbol": "USDC",
+            "decimals": 6,
+            "mintAddress": "zVzi5VAf4qMEwzv7NXECVx5v2pQ7xnqVVjCXZwS9XzA"
+        },
+        {
+            "name": "Serum",
+            "symbol": "SRM",
+            "decimals": 6,
+            "mintAddress": "GLnwzTMdvETds6JrLoAVxTCZGaLNtJufp1QZ5HAiLb5q"
+        },
+        {
+            "name": "USDT",
+            "symbol": "USDT",
+            "decimals": 6,
+            "mintAddress": "Bp2nLuamFZndE7gztA1iPsNVhdJeg9xfKdq7KmvjpGoP"
+        },
+        {
+            "name": "Bitcoin",
+            "symbol": "BTC",
+            "decimals": 6,
+            "mintAddress": "6hiEcA2aTgudqdP2DzEYpk5d4knFS8dv9RdotbxaErgQ"
+        },
+        {
+            "name": "Ethereum",
+            "symbol": "ETH",
+            "decimals": 6,
+            "mintAddress": "ECReE2Qo48af56BwUkx876eNP2M54NYp8HFLugTPrVWo"
+        }		
+	],
+	"markets": {
+        "address": "DoQJk9YUxLDEqF1YzwBEAw5w6ro7vcYT5wwxR8QQrUrD",
+        "authorityAddress": "DjjG2zTcsBa98HwbXLWUUsRnUWhb1mrUAJnZUwotzKAL",
+        "transferAuthorityAddress": "12UzZuy8YsGv8Dj4TfsKmBu3f6unLaU4kp4Zug2tPCe5", 
+		"reserves": [
+            {
+                "asset": "SOL",
+                "address": "5QXC4YHfzbsxYkw8BNqarma2YYUBLiXSn3AjKE6CK5Gn",
+                "collateralMintAddress": "FzwZWRMc3GCqjSrcpVX3ueJc6UpcV6iWWb7ZMsTXE3Gf",
+                "collateralSupplyAddress": "J5KGpESS8Zq2MvK4rtL6wKbeMRYZzb6TEzn8qPsZFgGd",
+                "liquidityAddress": "furd3XUtjXZ2gRvSsoUts9A5m8cMJNqdsyR2Rt8vY9s",
+                "liquidityFeeReceiverAddress": "5kFqzU2k1tEXtoeNayk1TVxLycoAH5k8WsaGnBnanYJH",
+                "userSupplyCap": 250
+            }	
+		]
+	}
+}

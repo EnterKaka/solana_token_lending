@@ -232,7 +232,7 @@ fn process_init_reserve(
     let rent = &Rent::from_account_info(rent_info)?;
     let token_program_id = next_account_info(account_info_iter)?;
 
-    assert_rent_exempt(rent, reserve_info)?;
+    // assert_rent_exempt(rent, reserve_info)?;
     let mut reserve = assert_uninitialized::<Reserve>(reserve_info)?;
     if reserve_info.owner != program_id {
         msg!(
