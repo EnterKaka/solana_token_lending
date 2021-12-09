@@ -39,18 +39,21 @@
         }		
 	],
 	"markets": {
-        "address": "DoQJk9YUxLDEqF1YzwBEAw5w6ro7vcYT5wwxR8QQrUrD",
-        "authorityAddress": "DjjG2zTcsBa98HwbXLWUUsRnUWhb1mrUAJnZUwotzKAL",
-        "transferAuthorityAddress": "12UzZuy8YsGv8Dj4TfsKmBu3f6unLaU4kp4Zug2tPCe5", 
+        "address": "7nZCaaCrzsaDh8feXbvbbRLcDvTswosPzqWAbSZUmPPy",
+        "authorityAddress": "5m7vYPyd7y1Gxy5yg9hneVtACCGTL8pxRzU3mU3tYY99",
+        "transferAuthorityAddress": "5m7vYPyd7y1Gxy5yg9hneVtACCGTL8pxRzU3mU3tYY99", 
 		"reserves": [
             {
                 "asset": "SOL",
-                "address": "5QXC4YHfzbsxYkw8BNqarma2YYUBLiXSn3AjKE6CK5Gn",
-                "collateralMintAddress": "FzwZWRMc3GCqjSrcpVX3ueJc6UpcV6iWWb7ZMsTXE3Gf",
-                "collateralSupplyAddress": "J5KGpESS8Zq2MvK4rtL6wKbeMRYZzb6TEzn8qPsZFgGd",
-                "liquidityAddress": "furd3XUtjXZ2gRvSsoUts9A5m8cMJNqdsyR2Rt8vY9s",
-                "liquidityFeeReceiverAddress": "5kFqzU2k1tEXtoeNayk1TVxLycoAH5k8WsaGnBnanYJH",
-                "userSupplyCap": 250
+                "address": "F2tnbHsbHCSipVurU2fmWTQbMp6HxDp7siXLx4Ae97dr"
+            },
+            {
+                "asset" : "BTC",
+                "address": "4MTHKsh3GqMUaWFkxsZFHoszA7KQ5ZJre511Fx5nDgc8"
+            },
+            {
+                "asset" : "ETH",
+                "address": "Hv1eX3RPiLVzbh6n1HWCd8NPrmqsVGDdjKx1ECLQBXCu"
             }	
 		]
 	}

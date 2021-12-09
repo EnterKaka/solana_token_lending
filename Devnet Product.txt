@@ -1,0 +1,31 @@
+sol : 3Mnn2fX6rQyUsyELYms1sBJyChWofzSNRoqYzvgMVz5E		J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix	AdtRGGhmqvom3Jemp5YNrxd9q9unX36BZk1pujkkXijL
+btc : 3m1y5h2uv7EQL3KaJZehvAJa4yDNvgc5yAdL9KPMKwvk		HovQMDrbAgAYPCmHVSrezcSmkMtXSSUsLDFANExrZh2J	74YzQPGUT9VnjrBz8MuyDLKgKpbDqGot5xZJvTtMi6Ng
+eth : 2ciUuGZiee5macAMeQ7bHGTJtwcYTgnt6jdmQnnKZrfu		EdVCmQ9FSPcVe5YySXDPCRmc8aDQLKJ9xvYBMZPie1Vw	QJc2HgGhdtW4e7zjvLB1TGRuwEpTre2agU5Lap2UqYz
+
+2pUVo4mVSnebLyLmMTHgPRNbk7rgZki77bsYgbsuuQX9585N4aKNXWJRpyc98qnpgRKRH2hzB8VVnqeffurW39F4 7g3rVMNDoMuZ7AbsngZW1BZcGfb1ZqPuXK4cb8BFgksh 6L7zEsYqGobmRHAoLnSxguhqvNNR5dDP7VP88JDTQgzW 
+
+pyth oracle : gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s
+switchboard oracle : 7azgmy1pFXHikv36q1zZASvFq5vFa39TT9NweVugKKTU
+program : GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W
+
+Create Lending Market
+spl-token-lending --program GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W  create-market --market-owner ESbm5twosKASpZSAKYJVqpPsAKP2obmscBt1CgNn82BU --oracle gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s --switchboard-oracle 7azgmy1pFXHikv36q1zZASvFq5vFa39TT9NweVugKKTU --fee-payer ./me.json
+
+Sol Reserve
+spl-token-lending --program GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W add-reserve --market 7nZCaaCrzsaDh8feXbvbbRLcDvTswosPzqWAbSZUmPPy --market-owner ./me.json --amount 5 --pyth-price J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix --pyth-product 3Mnn2fX6rQyUsyELYms1sBJyChWofzSNRoqYzvgMVz5E --switchboard-feed AdtRGGhmqvom3Jemp5YNrxd9q9unX36BZk1pujkkXijL --source EU4vjdsUV8dBDFFEgZVt3XzuFQfHanvwspw4s3Xq5VF2 --source-owner ./me.json --fee-payer ./me.json
+
+spl-token-lending --dry-run --program GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W add-reserve --market DoQJk9YUxLDEqF1YzwBEAw5w6ro7vcYT5wwxR8QQrUrD --market-owner ./me.json --amount 1 --pyth-price J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix --pyth-product 3Mnn2fX6rQyUsyELYms1sBJyChWofzSNRoqYzvgMVz5E --switchboard-feed AdtRGGhmqvom3Jemp5YNrxd9q9unX36BZk1pujkkXijL --source EU4vjdsUV8dBDFFEgZVt3XzuFQfHanvwspw4s3Xq5VF2 --source-owner ./me.json --fee-payer ./me.json
+
+BTC Reserve
+spl-token-lending  --program GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W add-reserve --market 7nZCaaCrzsaDh8feXbvbbRLcDvTswosPzqWAbSZUmPPy --market-owner ./me.json --amount 1 --pyth-price HovQMDrbAgAYPCmHVSrezcSmkMtXSSUsLDFANExrZh2J --pyth-product 3m1y5h2uv7EQL3KaJZehvAJa4yDNvgc5yAdL9KPMKwvk --switchboard-feed 74YzQPGUT9VnjrBz8MuyDLKgKpbDqGot5xZJvTtMi6Ng --source CwW5ctqhx6eWWnFBottmErHoiCcnWQYetMSpiYqGW5hq --source-owner ./me.json --fee-payer ./me.json
+
+ETH Reserve
+spl-token-lending  --program GoiNbvZjE5rEcTrBBqFCGVQJm5zFcPoL4Pipwcnje35W add-reserve --market 7nZCaaCrzsaDh8feXbvbbRLcDvTswosPzqWAbSZUmPPy --market-owner ./me.json --amount 100 --pyth-price EdVCmQ9FSPcVe5YySXDPCRmc8aDQLKJ9xvYBMZPie1Vw --pyth-product 2ciUuGZiee5macAMeQ7bHGTJtwcYTgnt6jdmQnnKZrfu --switchboard-feed QJc2HgGhdtW4e7zjvLB1TGRuwEpTre2agU5Lap2UqYz --source 6L7zEsYqGobmRHAoLnSxguhqvNNR5dDP7VP88JDTQgzW --source-owner ./me.json --fee-payer ./me.json
+
+Creating lending market 7nZCaaCrzsaDh8feXbvbbRLcDvTswosPzqWAbSZUmPPy
+Signature: 2mCBH6WZ31YcoDm5wRnd8F4YWCCr2yuv7fsaETcnkWmNBtV76PJ5sDqsUzCZy2RGxVtP4VVoRFBpVZfXqX3UDA2w
+Authority Address 5m7vYPyd7y1Gxy5yg9hneVtACCGTL8pxRzU3mU3tYY99
+
+sol : Adding reserve F2tnbHsbHCSipVurU2fmWTQbMp6HxDp7siXLx4Ae97dr
+btc : Adding reserve 4MTHKsh3GqMUaWFkxsZFHoszA7KQ5ZJre511Fx5nDgc8
+eth : Adding reserve Hv1eX3RPiLVzbh6n1HWCd8NPrmqsVGDdjKx1ECLQBXCu

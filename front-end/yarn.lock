@@ -2834,6 +2834,11 @@
   dependencies:
     "source-map" "^0.6.1"
 
+"@types/underscore@^1.11.4":
+  "integrity" "sha512-uO4CD2ELOjw8tasUrAhvnn2W4A0ZECOvMjCivJr4gA9pGgjv+qxKWY9GLTMVEK8ej85BxQOocUyE7hImmSQYcg=="
+  "resolved" "https://registry.npmjs.org/@types/underscore/-/underscore-1.11.4.tgz"
+  "version" "1.11.4"
+
 "@types/w3c-web-hid@^1.0.2":
   "integrity" "sha512-tNLnl6+/AkmASEnviwdLLE6kaXlY28cDVyQ3e+WwnEAm5DHyO7c71a5TtYX6ofrnzzdQSnNsjNMoggsbrtOYfQ=="
   "resolved" "https://registry.npmjs.org/@types/w3c-web-hid/-/w3c-web-hid-1.0.2.tgz"
@@ -12827,6 +12832,11 @@
     "has-bigints" "^1.0.1"
     "has-symbols" "^1.0.2"
     "which-boxed-primitive" "^1.0.2"
+
+"underscore@^1.13.1":
+  "integrity" "sha512-hzSoAVtJF+3ZtiFX0VgfFPHEDRm7Y/QPjGyNo4TVdnDTdft3tr8hEkD25a1jC+TjTuE7tkHGKkhwCgs9dgBB2g=="
+  "resolved" "https://registry.npmjs.org/underscore/-/underscore-1.13.1.tgz"
+  "version" "1.13.1"
 
 "unicode-canonical-property-names-ecmascript@^2.0.0":
   "integrity" "sha512-yY5PpDlfVIU5+y/BSCxAJRBIS1Zc2dDG3Ujq+sR0U+JjUevW2JhocOF+soROYDSaAezOzOKuyyixhD6mBknSmQ=="

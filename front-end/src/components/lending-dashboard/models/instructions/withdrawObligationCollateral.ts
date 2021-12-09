@@ -28,7 +28,7 @@ export const withdrawObligationCollateralInstruction = (
   dataLayout.encode(
     {
       instruction: LendingInstruction.WithdrawObligationCollateral,
-      liquidityAmount: new BN(collateralAmount),
+      collateralAmount: new BN(collateralAmount),
     },
     data,
   )

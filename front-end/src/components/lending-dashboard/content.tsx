@@ -24,6 +24,7 @@ import { getATAAddress } from '@saberhq/token-utils';
 import moment from 'moment';
 import useNotify from './notify';
 import { Timer } from './timer';
+import { findWhere, map } from 'underscore';
 import {
   ReserveParser, 
   RESERVE_LEN,
@@ -40,6 +41,7 @@ import {
   withdrawObligationCollateralInstruction,
   borrowObligationLiquidityInstruction,
   repayObligationLiquidityInstruction,
+  refreshReserveInstruction,
 } from './models/instructions'
 
 import {
@@ -78,6 +80,7 @@ const market = new PublicKey(market_data.markets.address)
 const marketAuthority = new PublicKey(market_data.markets.authorityAddress)
 let lending_balance = 0;
 let borrow_balance = 0;
+let allowed_borrow_balance = 0;
 
 export async function getAssociatedTokenAddress(mint: any, owner: any) {
   let [address] = await PublicKey.findProgramAddress(
@@ -88,7 +91,7 @@ export async function getAssociatedTokenAddress(mint: any, owner: any) {
 }
 
 export async function getObligationAddress(owner : PublicKey){
-  let address = await PublicKey.createWithSeed(owner, 'obligation', programId)
+  let address = await PublicKey.createWithSeed(owner, 'obligation1', programId)
   return address
 }
 
@@ -121,7 +124,7 @@ async function getReserveData(){
       reserves.push({
         ...reserveData,
         asset,
-        img : 'images/seeded_icon.svg',
+        img : 'images/'+asset+".svg",
         mintDecimals : reserveData!.info.liquidity.mintDecimals,
         availableAmount : availableAmount,
         borrowedAmount : borrowedAmount,
@@ -155,7 +158,6 @@ async function getLendData(idx : number){
   lendData.apy = reserve.supplyAPY
   lendData.collateralFactor = reserve.info.config.loanToValueRatio
   lendData.decimals = reserve.mintDecimals
-
   let owner = wallet.publicKey
   if(reserve.asset != 'SOL'){
     let mintAddress = reserve.info.liquidity.mintPubkey;
@@ -170,6 +172,7 @@ async function getLendData(idx : number){
     lendData.walletBalance = (await conn.getBalance(owner))/Math.pow(10,9)
   }
   lendData.lendBalance = 0
+  lendData.limit = 0
   if(obligation){
     for(let deposit of obligation.info.deposits){
       if(reserve.pubkey.toBase58()==deposit.depositReserve.toBase58()){
@@ -177,6 +180,8 @@ async function getLendData(idx : number){
         break;
       }
     }
+    lendData.limit = allowed_borrow_balance - borrow_balance
+    lendData.usedLimit = borrow_balance / lending_balance * 100
   }  
 }
 
@@ -189,7 +194,7 @@ let borrowData = {
   borrowBalance: 0,
   accruedInterest: 0,
   limit: 0,
-  limitBalance: 0,
+  borrowLimit: 0,
   decimals: 0,
   usedLimit: 0,
 };
@@ -205,9 +210,13 @@ async function getBorrowData(idx : number){
   borrowData.accruedInterest = reserve.accrue
   if(obligation){
     for(let borrow of obligation.info.borrows) {
-      borrowData.borrowBalance = (new BigNumber(borrow.borrowedAmountWads.toString)).dividedBy(WAD).toNumber() / Math.pow(10,reserve.mintDecimals)
-      console.log(reserve.accrue)
+      if(reserve.pubkey.toBase58()==borrow.borrowReserve.toBase58()){
+        borrowData.borrowBalance = (new BigNumber(borrow.borrowedAmountWads.toString())).dividedBy(WAD).toNumber() / Math.pow(10,reserve.mintDecimals)
+      }
     }
+    borrowData.limit = allowed_borrow_balance - borrow_balance
+    borrowData.usedLimit = borrow_balance / lending_balance * 100    
+    borrowData.borrowLimit = borrowData.limit /reserve.marketPrice
   }
 }
 
@@ -219,6 +228,7 @@ async function getObligationData(){
   borrow_items.splice(0,borrow_items.length)
   lending_balance = 0
   borrow_balance = 0
+  netApy = 0
   obligation = null
   if(!wallet || wallet.connected == false) return;
   let obligationAddress = await getObligationAddress(wallet.publicKey)
@@ -226,44 +236,55 @@ async function getObligationData(){
   if(resp == null) return;
   let obligationData = ObligationParser(obligationAddress,resp)
   obligation = obligationData
+  // lending_balance = (new BigNumber(obligationData!.info.depositedValue.toString())).dividedBy(WAD).toNumber()
+  // borrow_balance = (new BigNumber(obligationData!.info.borrowedValue.toString())).dividedBy(WAD).toNumber()
+  allowed_borrow_balance = (new BigNumber(obligationData!.info.allowedBorrowValue.toString())).dividedBy(WAD).toNumber()
+  let remain = allowed_borrow_balance - borrow_balance
 
   for(let deposit of obligation.info.deposits){
     let balance = deposit.depositedAmount.toNumber()
     if(balance == 0) continue;
     for(let reserve of reserves){
       if(reserve.pubkey.toBase58() == deposit.depositReserve.toBase58()){
+        balance /= Math.pow(10,reserve.mintDecimals)
         lended_items.push({
           img : reserve.img,
           asset : reserve.asset,
           apy : reserve.supplyAPY,
-          balance :  balance / Math.pow(10,reserve.mintDecimals),
+          balance :  balance,
           collateralFactor : reserve.info.config.loanToValueRatio
         })
+        lending_balance += reserve.marketPrice * balance
+        netApy += reserve.supplyAPY * reserve.marketPrice * balance
         break;
       }
     }
   }
+  if(lending_balance != 0)
+    netApy /= lending_balance
+  else
+    netApy = 0
 
   for(let borrow of obligation.info.borrows) {
-    let balance = (new BigNumber(borrow.borrowedAmountWads.toString)).dividedBy(WAD).toNumber()
+    let balance = (new BigNumber(borrow.borrowedAmountWads.toString())).dividedBy(WAD).toNumber()
     if(balance == 0) continue;
     for(let reserve of reserves){
       if(reserve.pubkey.toBase58() == borrow.borrowReserve.toBase58()){
-
+        balance /= Math.pow(10,reserve.mintDecimals)
         borrow_items.push({
           img : reserve.img,
           asset : reserve.asset,
-          apy : reserve.supplyAPY,
-          balance : balance / Math.pow(10,reserve.mintDecimals),
-          borrowLimit : 0,
+          apy : reserve.borrowAPY,
+          balance : balance,
+          borrowLimit : remain/reserve.marketPrice < reserve.availableAmount ? remain/reserve.marketPrice : reserve.availableAmount,
         })
+        borrow_balance += reserve.marketPrice * balance
         break;
       }
     }
   }
 
-  lending_balance = (new BigNumber(obligationData!.info.depositedValue.toString())).dividedBy(WAD).toNumber()
-  borrow_balance = (new BigNumber(obligationData!.info.borrowedValue.toString())).dividedBy(WAD).toNumber()
+
 }
 
 async function createTokenAccountInstruction(mint : PublicKey){
@@ -310,44 +331,27 @@ async function lend(amount : number){
   console.log("+ Lend")
   try {
     // let transaction = new Transaction()
-    let signers : Keypair[] = []
+
     let reserve = reserves[lendData.idx]
     let liquidityAmount = amount * Math.pow(10, reserve.mintDecimals)
-
-    let sourceLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.publicKey)
-    if((await conn.getAccountInfo(sourceLiquidity)) == null){
-      let transaction = new Transaction()
-      transaction.add(await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey))
-      await sendTransaction(transaction,[])
-    }
-
-    let destinationCollateral = await getAssociatedTokenAddress(reserve.info.collateral.mintPubkey,wallet.publicKey)
-    if((await conn.getAccountInfo(destinationCollateral)) == null){
-      let transaction = new Transaction()
-      transaction.add(await createTokenAccountInstruction(reserve.info.collateral.mintPubkey))
-      await sendTransaction(transaction,[])
-    }   
-
+    
+    let transaction1 = new Transaction()
     let obligation = await getObligationAddress(wallet.publicKey)
-    const rent = await conn.getMinimumBalanceForRentExemption(OBLIGATION_LEN)
-    console.log(obligation.toBase58())
-    if((await conn.getAccountInfo(obligation)) == null){
-      let transaction1 = new Transaction()
-
+    let resp = await conn.getAccountInfo(obligation)
+    if(resp == null){
+      const rent = await conn.getMinimumBalanceForRentExemption(OBLIGATION_LEN)
       transaction1.add(
         SystemProgram.createAccountWithSeed({
           basePubkey : wallet.publicKey,
           fromPubkey : wallet.publicKey,
-          seed : 'obligation',
+          seed : 'obligation1',
           newAccountPubkey : obligation,
           lamports : rent,
           space : OBLIGATION_LEN,
           programId : programId,
         })
       )
-      await sendTransaction(transaction1,[])
-      let transaction2 = new Transaction()
-      transaction2.add(
+      transaction1.add(
         await initObligationInstruction(
           programId,
           obligation,
@@ -355,23 +359,112 @@ async function lend(amount : number){
           wallet.publicKey,
         )        
       )
-      await sendTransaction(transaction2,[])
+      await sendTransaction(transaction1,[])
+    } else {
+      let obligationData = ObligationParser(obligation,resp)
+      if(obligationData!.info.version != 1){
+        transaction1.add(
+          await initObligationInstruction(
+            programId,
+            obligation,
+            market,
+            wallet.publicKey,
+          )        
+        )
+        await sendTransaction(transaction1,[])
+      }
     }
 
+    let transaction3 = new Transaction()
+    let signers3 : Keypair[] = []
+    let sourceLiquidity : any;
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      const accountRentExempt = await conn.getMinimumBalanceForRentExemption(splToken.AccountLayout.span)
+      let source = Keypair.generate()
+      signers3.push(source)
+      sourceLiquidity = source.publicKey
+      transaction3.add(
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: sourceLiquidity,
+          lamports: liquidityAmount + accountRentExempt*3,
+          space: splToken.AccountLayout.span,
+          programId: splToken.TOKEN_PROGRAM_ID,
+        })
+      )
+      transaction3.add(
+        splToken.Token.createInitAccountInstruction(
+          splToken.TOKEN_PROGRAM_ID,
+          splToken.NATIVE_MINT,
+          sourceLiquidity,
+          wallet.publicKey,
+        )
+      )
+      await sendTransaction(transaction3,signers3)
+    }else{
+      sourceLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.publicKey)
+      if((await conn.getAccountInfo(sourceLiquidity)) == null){
+        transaction3.add(await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey))
+        await sendTransaction(transaction3,signers3)
+      }
+    }
 
-    let transaction = new Transaction()
+    
+
+    let transaction2 = new Transaction()
+    let signers2 : Keypair[] = []    
+    let destinationCollateral = await getAssociatedTokenAddress(reserve.info.collateral.mintPubkey,wallet.publicKey)
+    if((await conn.getAccountInfo(destinationCollateral)) == null)
+      transaction2.add(await createTokenAccountInstruction(reserve.info.collateral.mintPubkey))
+    
     let transferAuthority = Keypair.generate()
-    transaction.add(
+    signers2.push(transferAuthority)       
+    transaction2.add(
       splToken.Token.createApproveInstruction(
         splToken.TOKEN_PROGRAM_ID,
         sourceLiquidity,
         transferAuthority.publicKey,
         wallet.publicKey,
         [],
-        liquidityAmount
+        liquidityAmount,
       )
     )
-    transaction.add(
+    resp = await conn.getAccountInfo(obligation)
+    let obligationData = ObligationParser(obligation, resp!)
+    let depositReserves = map(obligationData!.info.deposits, (deposit)=>deposit.depositReserve)
+    let borrowReserves = map(obligationData!.info.borrows, (borrow)=>borrow.borrowReserve)
+    // const uniqReserveAddresses = [...new Set<String>(map(depositReserves.concat(borrowReserves), (reserve) => reserve.toString()))];
+    // uniqReserveAddresses.forEach((reserveAddress) => {
+    //   for(let temp of reserves){
+    //     if(temp.pubkey.toBase58() == reserveAddress){
+    //       transaction2.add(
+    //         refreshReserveInstruction(
+    //           programId,
+    //           temp.pubkey,
+    //           temp.info.liquidity.pythOracle,
+    //           temp.info.liquidity.switchboardOracle,
+    //         )
+    //       )
+    //     }
+    //   }
+    // });
+    for(let temp of reserves){
+      transaction2.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+
+    transaction2.add(
+      refreshObligationInstruction(
+        programId,
+        obligation,
+        depositReserves,
+        borrowReserves,
+      )
+    )
+    transaction2.add(
       depositReserveLiquidityInstruction(
         programId,
         liquidityAmount,
@@ -385,33 +478,44 @@ async function lend(amount : number){
         transferAuthority.publicKey,
       )
     )
-    transaction.add(
+    transaction2.add(
       splToken.Token.createRevokeInstruction(splToken.TOKEN_PROGRAM_ID,sourceLiquidity,wallet.publicKey,[])
     )
-    transaction.add(
+    let collateralExchangeRate = 1;
+    if((reserve.availableAmount+reserve.borrowedAmount) != 0)
+      collateralExchangeRate = Math.floor(reserve.info.collateral.mintTotalSupply.toNumber() / (reserve.availableAmount+reserve.borrowedAmount) * Math.pow(10,6)) / Math.pow(10,6)
+    let collateralAmount = Math.floor(liquidityAmount*collateralExchangeRate)
+    console.log(collateralAmount)
+    transaction2.add(
       splToken.Token.createApproveInstruction(
         splToken.TOKEN_PROGRAM_ID,
         destinationCollateral,
         transferAuthority.publicKey,
         wallet.publicKey,
         [],
-        liquidityAmount
+        collateralAmount
       )
     )
-    transaction.add(
-      splToken.Token.createApproveInstruction(
-        splToken.TOKEN_PROGRAM_ID,
-        sourceLiquidity,
-        transferAuthority.publicKey,
-        wallet.publicKey,
-        [],
-        liquidityAmount
+    for(let temp of reserves){
+      transaction2.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+    
+    transaction2.add(
+      refreshObligationInstruction(
+        programId,
+        obligation,
+        depositReserves,
+        borrowReserves,
       )
     )
-    transaction.add(
+    transaction2.add(
       depositObligationCollateralInstruction(
         programId,
-        liquidityAmount,
+        collateralAmount,
         destinationCollateral,
         reserve.info.collateral.supplyPubkey,
         reserve.pubkey,
@@ -421,16 +525,11 @@ async function lend(amount : number){
         transferAuthority.publicKey
       )
     )
-    transaction.instructions.map((inst)=>{
-      console.log(inst.programId.toBase58())
-    })
-    transaction.add(
+    transaction2.add(
       splToken.Token.createRevokeInstruction(splToken.TOKEN_PROGRAM_ID,destinationCollateral,wallet.publicKey,[])
     )
 
-    signers.push(transferAuthority)
-    await sendTransaction(transaction,signers)
-
+    await sendTransaction(transaction2,signers2)
   } catch(err) {
     console.log(err)
   }
@@ -439,47 +538,115 @@ async function lend(amount : number){
 async function withdraw(amount : number){
   console.log("+ Withdraw")
   try {
-    let transaction = new Transaction()
-    let signers : Keypair[] = []
     let reserve = reserves[lendData.idx]
     let collateralAmount = amount * Math.pow(10,reserve.mintDecimals)
-    let obligation = await getObligationAddress(wallet.publicKey)
-    if((await conn.getAccountInfo(obligation)) == null){
-      await createObligation(transaction)
-    }
+    if(obligation == null) throw new Error("Obligation cannot be null")
+    let depositReserves = map(obligation!.info.deposits, (deposit)=>deposit.depositReserve)
+    let borrowReserves = map(obligation!.info.borrows, (borrow)=>borrow.borrowReserve)
+
+    let transaction3 = new Transaction()
+    let signers3 : Keypair[] = []
+    let destinationLiquidity : any;
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      const accountRentExempt = await conn.getMinimumBalanceForRentExemption(splToken.AccountLayout.span)
+      let dest = Keypair.generate()
+      signers3.push(dest)
+      destinationLiquidity = dest.publicKey
+      transaction3.add(
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: destinationLiquidity,
+          lamports: accountRentExempt*3,
+          space: splToken.AccountLayout.span,
+          programId: splToken.TOKEN_PROGRAM_ID,
+        })
+      )
+      transaction3.add(
+        splToken.Token.createInitAccountInstruction(
+          splToken.TOKEN_PROGRAM_ID,
+          splToken.NATIVE_MINT,
+          destinationLiquidity,
+          wallet.publicKey,
+        )
+      )
+      await sendTransaction(transaction3,signers3)
+    }else{
+      destinationLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.publicKey)
+      if((await conn.getAccountInfo(destinationLiquidity)) == null){
+        transaction3.add(await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey))
+        await sendTransaction(transaction3,signers3)
+      }
+    }    
+
+    let transaction2 = new Transaction()
+    let signers : Keypair[] = []
     let destinationCollateral = await getAssociatedTokenAddress(reserve.info.collateral.mintPubkey,wallet.publicKey)
+    if((await conn.getAccountInfo(destinationCollateral)) == null)
+      transaction2.add(await createTokenAccountInstruction(reserve.info.collateral.mintPubkey))
 
-    let destinationLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey, wallet.publicKey)
-
-    let transferAuthority = Keypair.generate()
-
-    transaction.add(
+    for(let temp of reserves){
+      transaction2.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+    transaction2.add(
+      refreshObligationInstruction(
+        programId,
+        obligation.pubkey,
+        depositReserves,
+        borrowReserves,
+      )
+    )
+    transaction2.add(
       withdrawObligationCollateralInstruction(
         programId,
         collateralAmount,
-        reserve.info.liquidity.supplyPubkey,
+        reserve.info.collateral.supplyPubkey,
         destinationCollateral,
         reserve.pubkey,
-        obligation,
+        obligation.pubkey,
         market,
         marketAuthority,
         wallet.publicKey
       )
     )
-    transaction.add(
+    let liquidityAmount = collateralAmount
+    // if((reserve.availableAmount+reserve.borrowedAmount) != 0 && reserve.info.collateral.mintTotalSupply.toNumber() !=0)
+    //   liquidityAmount = floorValue(liquidityAmount / reserve.info.collateral.mintTotalSupply * (reserve.availableAmount+reserve.borrowedAmount), 5)
+
+    let transferAuthority = Keypair.generate()
+    signers.push(transferAuthority)
+    for(let temp of reserves){
+      transaction2.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+    transaction2.add(
+      refreshObligationInstruction(
+        programId,
+        obligation.pubkey,
+        depositReserves,
+        borrowReserves,
+      )
+    )
+    transaction2.add(
       splToken.Token.createApproveInstruction(
         splToken.TOKEN_PROGRAM_ID,
         destinationCollateral,
         transferAuthority.publicKey,
         wallet.publicKey,
         [],
-        collateralAmount,
+        liquidityAmount,
       )
     )
-    transaction.add(
+    transaction2.add(
       redeemReserveCollateralInstruction(
         programId,
-        collateralAmount,
+        liquidityAmount,
         destinationCollateral,
         destinationLiquidity,
         reserve.pubkey,
@@ -490,11 +657,17 @@ async function withdraw(amount : number){
         transferAuthority.publicKey,
       )
     )
-    transaction.add(
+    transaction2.add(
       splToken.Token.createRevokeInstruction(splToken.TOKEN_PROGRAM_ID,destinationCollateral,wallet.publicKey,[])
     )
-    signers.push(transferAuthority)
-    sendTransaction(transaction,signers)
+
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      transaction2.add(
+        splToken.Token.createCloseAccountInstruction(splToken.TOKEN_PROGRAM_ID,destinationLiquidity,wallet.publicKey,wallet.publicKey,[])
+      )
+    }
+
+    await sendTransaction(transaction2,signers)
   } catch(err) {
     console.log(err)
   }
@@ -507,13 +680,57 @@ async function borrow(amount : number){
     let signers : Keypair[] = []
     let reserve = reserves[borrowData.idx]
     let liquidityAmount = amount * Math.pow(10, reserve.mintDecimals)
-    let destinationLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.pubkey)
-    if((await conn.getAccountInfo(destinationLiquidity)) == null){
+    let destinationLiquidity : any;
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      const accountRentExempt = await conn.getMinimumBalanceForRentExemption(splToken.AccountLayout.span);
+      let dest = Keypair.generate()
+      signers.push(dest)
+      destinationLiquidity = dest.publicKey;
       transaction.add(
-        await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey)
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: destinationLiquidity,
+          lamports: accountRentExempt*3,
+          space: splToken.AccountLayout.span,
+          programId: splToken.TOKEN_PROGRAM_ID,
+        })
       )
+      transaction.add(
+        splToken.Token.createInitAccountInstruction(
+          splToken.TOKEN_PROGRAM_ID,
+          splToken.NATIVE_MINT,
+          destinationLiquidity,
+          wallet.publicKey,
+        )
+      )
+
+    } else {
+      destinationLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.publicKey)
+      if((await conn.getAccountInfo(destinationLiquidity)) == null){
+        transaction.add(await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey))
+      }
     }
 
+    if(obligation == null) throw new Error("Obligation cannot be null")
+
+    let depositReserves = map(obligation!.info.deposits, (deposit)=>deposit.depositReserve)
+    let borrowReserves = map(obligation!.info.borrows, (borrow)=>borrow.borrowReserve)
+    for(let temp of reserves){
+      transaction.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+    transaction.add(
+      refreshObligationInstruction(
+        programId,
+        obligation.pubkey,
+        depositReserves,
+        borrowReserves,
+      )
+    )
+    console.log(liquidityAmount)
     transaction.add(
       borrowObligationLiquidityInstruction(
         programId,
@@ -521,13 +738,19 @@ async function borrow(amount : number){
         reserve.info.liquidity.supplyPubkey,
         destinationLiquidity,
         reserve.pubkey,
-        obligation,
+        reserve.info.config.feeReceiver,
+        obligation.pubkey,
         market,
         marketAuthority,
         wallet.publicKey,
       )
     )
-    sendTransaction(transaction,signers)
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      transaction.add(
+        splToken.Token.createCloseAccountInstruction(splToken.TOKEN_PROGRAM_ID,destinationLiquidity,wallet.publicKey,wallet.publicKey,[])
+      )
+    }
+    await sendTransaction(transaction,signers)
   } catch(err) {
     console.log(err)
   }
@@ -540,13 +763,60 @@ async function repay(amount : number){
     let signers : Keypair[] = []
     let reserve = reserves[borrowData.idx]
     let liquidityAmount = amount * Math.pow(10, reserve.mintDecimals)
-    let sourceLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.pubkey)
-    if((await conn.getAccountInfo(sourceLiquidity)) == null){
+    if(liquidityAmount < 1) throw new Error("Invalid Amount")
+    let sourceLiquidity : any;
+
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      const accountRentExempt = await conn.getMinimumBalanceForRentExemption(splToken.AccountLayout.span);
+      let source = Keypair.generate()
+      signers.push(source)
+      sourceLiquidity = source.publicKey;
       transaction.add(
-        await createTokenAccountInstruction(reserve.info.liquidity.mintPubkey)
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: sourceLiquidity,
+          lamports: liquidityAmount + accountRentExempt*3,
+          space: splToken.AccountLayout.span,
+          programId: splToken.TOKEN_PROGRAM_ID,
+        })
       )
-    } 
+      transaction.add(
+        splToken.Token.createInitAccountInstruction(
+          splToken.TOKEN_PROGRAM_ID,
+          splToken.NATIVE_MINT,
+          sourceLiquidity,
+          wallet.publicKey,
+        )
+      )
+
+    } else {
+      sourceLiquidity = await getAssociatedTokenAddress(reserve.info.liquidity.mintPubkey,wallet.publicKey)
+      if((await conn.getAccountInfo(sourceLiquidity)) == null){
+        throw new Error("Source liquidity account is not invalid.")
+      }
+    }
+
+    if(obligation == null) throw new Error("Obligation cannot be null")
+
     let transferAuthority = Keypair.generate()
+    signers.push(transferAuthority)
+    let depositReserves = map(obligation!.info.deposits, (deposit)=>deposit.depositReserve)
+    let borrowReserves = map(obligation!.info.borrows, (borrow)=>borrow.borrowReserve)
+    for(let temp of reserves){
+      transaction.add(
+        refreshReserveInstruction(
+          programId,temp.pubkey,temp.info.liquidity.pythOracle, temp.info.liquidity.switchboardOracle,
+        )
+      )
+    }
+    transaction.add(
+      refreshObligationInstruction(
+        programId,
+        obligation.pubkey,
+        depositReserves,
+        borrowReserves,
+      )
+    ) 
     transaction.add(
       splToken.Token.createApproveInstruction(
         splToken.TOKEN_PROGRAM_ID,
@@ -564,7 +834,7 @@ async function repay(amount : number){
         sourceLiquidity,
         reserve.info.liquidity.supplyPubkey,
         reserve.pubkey,
-        obligation,
+        obligation.pubkey,
         market,
         transferAuthority.publicKey,
       )
@@ -572,8 +842,13 @@ async function repay(amount : number){
     transaction.add(
       splToken.Token.createRevokeInstruction(splToken.TOKEN_PROGRAM_ID,sourceLiquidity,wallet.publicKey,[])
     )
-    signers.push(transferAuthority)
-    sendTransaction(transaction,signers)
+
+    if(reserve.info.liquidity.mintPubkey.toBase58() == splToken.NATIVE_MINT.toBase58()){
+      transaction.add(
+        splToken.Token.createCloseAccountInstruction(splToken.TOKEN_PROGRAM_ID,sourceLiquidity,wallet.publicKey,wallet.publicKey,[])
+      )
+    }
+    await sendTransaction(transaction,signers)
   } catch(err) {
     console.log(err)
   }
@@ -599,12 +874,21 @@ async function sendTransaction(transaction : Transaction,signers : Keypair[]) {
 
 async function loadLending(callback : any, wallet : any){
     await getReserveData()
-    // await getObligationData()
+    await getObligationData()
     console.log(reserves)
 }
 
 function roundValue(val: number, positionPoint: number) {
-  return Math.round(val * Math.pow(10, positionPoint)) / Math.pow(10, positionPoint);
+  let newVaule = Math.round(val * Math.pow(10, positionPoint)) / Math.pow(10, positionPoint)
+  return newVaule!=0 ? newVaule : (val!=0 ? "~ 0" : 0)
+}
+
+function floorValue(val: number, positionPoint: number) {
+  return Math.floor(val * Math.pow(10, positionPoint)) / Math.pow(10, positionPoint)
+}
+
+function ceilValue(val: number, positionPoint: number) {
+  return Math.ceil(val * Math.pow(10, positionPoint)) / Math.pow(10, positionPoint)
 }
 
 let init = true;
@@ -623,7 +907,6 @@ export default function Content() {
   const [progress, setProgress] = useState(0);
   const [assetlock , setAssetLock] = useState(false);
   wallet = useWallet();
-  // console.log(wallet.publicKey?.toBase58());
 
   notify = useNotify();
   const lendCancelButtonRef = useRef(null);
@@ -650,7 +933,7 @@ export default function Content() {
   };
 
   const changeValue3 = (event: any) => {
-    if (event.target.value > borrowData.limitBalance) {
+    if (event.target.value > borrowData.borrowLimit) {
       setAmount3(0);
       setValidValue(true);
     } else {
@@ -744,7 +1027,7 @@ export default function Content() {
       </div>
       <div className='top-layout'>
         <div className='net-color'>Net APY</div>
-        <div className='percent-color'>{netApy}%</div>
+        <div className='percent-color'>{roundValue(netApy,4)}%</div>
       </div>
       <div className='flex justify-between title-layout'>
         <div className='l-bal text-left'>
@@ -780,11 +1063,12 @@ export default function Content() {
                       <div className='ml-2'>{item.asset}</div>
                     </div>
                     <div className='w-1/6'>{roundValue(item.apy,2)}% </div>
-                    <div className='w-2/6'>${roundValue(item.balance, 4)}</div>
+                    <div className='w-2/6'>{roundValue(item.balance, 4)} {item.asset}</div>
                     <div className='w-2/6'>{roundValue(item.collateralFactor, 2)}%</div>
                   </div>
                 ))}
-{/*                <div className='flex justify-between title-font-lock'>
+              {/*                
+                <div className='flex justify-between title-font-lock'>
                   <div className='w-1/6 text-left'>LOCKED</div>
                   <div className='w-1/6'>Time left</div>
                   <div className='w-1/6'>AMOUNT</div>
@@ -809,7 +1093,8 @@ export default function Content() {
                       </button>
                     </div>
                   </div>
-                ))}*/}
+                ))}
+              */}
               </div>
               <div className='borrow-part rounded-xl p-12 text-right'>
                 <div className='flex justify-between title-font'>
@@ -825,8 +1110,8 @@ export default function Content() {
                       <div className='ml-2'>{item.asset}</div>
                     </div>
                     <div className='w-1/6'>{roundValue(item.apy,2)}%</div>
-                    <div className='w-2/6'>${roundValue(item.balance, 4)}</div>
-                    <div className='w-2/6'>${roundValue(item.borrowLimit, 4)}</div>
+                    <div className='w-2/6'>{roundValue(item.balance, 4)} {item.asset}</div>
+                    <div className='w-2/6'>{roundValue(item.borrowLimit, 4)} {item.asset}</div>
                   </div>
                 ))}
               </div>
@@ -1013,7 +1298,7 @@ export default function Content() {
                           <div>{roundValue(lendData.collateralFactor, 4)}%</div>
                         </div>
                         <div className='modal-text text-left mt-9 mx-9'></div>
-                        <div className='modal-text text-left mt-9 mx-9'>TOKEN LOCKING</div>
+   {/*                     <div className='modal-text text-left mt-9 mx-9'>TOKEN LOCKING</div>
                         <div className='flex justify-between mt-4 mx-9 text-xs'>
                           <div>Duration locked</div>
                           <div>90 days</div>
@@ -1024,7 +1309,7 @@ export default function Content() {
                           {assetlock ? <img className='w-3.5 mouse-cursor' src='images/locked.svg' alt='sol' />
                             : <img className='w-3.5 mouse-cursor' src='images/unlocked.svg' alt='sol' />}
                         <div className='ml-2'>{assetlock ? 'Lend my tokens' : 'Lock my tokens'}</div>
-                        </div>
+                        </div>*/}
                         <div className='mt-2 mb-14 mx-9'>
                           <button
                             className='custom-button'
@@ -1034,6 +1319,7 @@ export default function Content() {
                                 await lend(amount1);
                               // else
                               //   await lockAsset(amount1);
+                              await loadLending(reRender, wallet.publicKey)
                               setAmount1(0);
                               setAssetLock(false);
                               setLendOpen(false)
@@ -1043,12 +1329,16 @@ export default function Content() {
                         </div>
                       </div>
                       <div className={lendtabshow === 'withdraw' ? 'tab-show' : 'tab-hidden'}>
-                        <div className='flex justify-between mb-4 mx-9 mt-9'>
+                        <div className='flex justify-between mb-4 mx-9 mt-9' 
+                          // onClick={()=>{
+                          //   setAmount2(floorValue(lendData.lendBalance, lendData.decimals))
+                          // }}
+                        >
                           <div className='modal-text'>AMOUNT</div>
                           <div className='modal-balance'>
                             <span>Lend balance: </span>
                             <span className='unit-color'>
-                              {roundValue(lendData.lendBalance, 7)} {lendData.asset}
+                              {roundValue(lendData.lendBalance, 4)} {lendData.asset}
                             </span>
                           </div>
                         </div>
@@ -1058,7 +1348,7 @@ export default function Content() {
                             name='price'
                             id='price'
                             className='focus:ring-indigo-500 focus:border-indigo-500 block w-full pr-4 custom-input text-right'
-                            // value={amount}
+                            value={amount2}
                             onChange={changeValue2}
                             placeholder=' 0.00'
                           />
@@ -1092,16 +1382,17 @@ export default function Content() {
                         </div>
                         <div className='flex justify-between mt-4 mx-9 text-xs'>
                           <div>Limit used</div>
-                          <div>{roundValue(lendData.usedLimit, 4)}%</div>
+                          <div>{roundValue(lendData.usedLimit, 2)}%</div>
                         </div>
                         <div className='mt-6 mb-14 mx-9'>
                           <button
                             className='custom-button'
                             type='button'
                             onClick={async () => {
-                              await withdraw(amount2);
-                              setAmount2(0);
-                              setLendOpen(false);
+                              await withdraw(amount2)
+                              await loadLending(reRender, wallet.publicKey)
+                              setAmount2(0)
+                              setLendOpen(false)
                             }}>
                             Withdraw
                           </button>
@@ -1162,7 +1453,7 @@ export default function Content() {
                             <span>Borrow limit: </span>
                             {/* <span className='unit-color'>{Math.round(borrowData.limit * 100) / 100}</span> */}
                             <span className='unit-color'>
-                              {roundValue(borrowData.limitBalance, 4)} {borrowData.asset}
+                              {roundValue(borrowData.borrowLimit, 4)} {borrowData.asset}
                             </span>
                           </div>
                         </div>
@@ -1204,7 +1495,7 @@ export default function Content() {
                         </div>
                         <div className='flex justify-between mt-4 mx-9 text-xs'>
                           <div>Limit used</div>
-                          <div>{roundValue(borrowData.usedLimit, 4)}%</div>
+                          <div>{roundValue(borrowData.usedLimit, 2)}%</div>
                         </div>
                         <div className='mt-4 mb-14 mx-9'>
                           <button
@@ -1212,9 +1503,10 @@ export default function Content() {
                             type='button'
                             onClick={async () => {
                               if (wallet.connected) {
-                                await borrow(amount3);
-                                setAmount3(0);
-                                setBorrowOpen(false);
+                                await borrow(amount3)
+                                await loadLending(reRender, wallet.publicKey)
+                                setAmount3(0)
+                                setBorrowOpen(false)
                               }
                             }}>
                             Borrow
@@ -1222,7 +1514,9 @@ export default function Content() {
                         </div>
                       </div>
                       <div className={borrowtabshow === 'repay' ? 'tab-show' : 'tab-hidden'}>
-                        <div className='flex justify-between mb-4 mx-9 mt-9'>
+                        <div className='flex justify-between mb-4 mx-9 mt-9' onClick={()=>{
+                            setAmount4(floorValue(borrowData.borrowBalance, borrowData.decimals))
+                          }}>
                           <div className='modal-text'>AMOUNT</div>
                           <div className='modal-balance'>
                             <span>Borrow balance: </span>
@@ -1237,7 +1531,7 @@ export default function Content() {
                             name='price'
                             id='price'
                             className='focus:ring-indigo-500 focus:border-indigo-500 block w-full pr-4 custom-input text-right'
-                            // value={amount}
+                            value={amount4}
                             onChange={changeValue4}
                             placeholder=' 0.00'
                           />
@@ -1269,7 +1563,7 @@ export default function Content() {
                         </div>
                         <div className='flex justify-between mt-4 mx-9 text-xs'>
                           <div>Limit used</div>
-                          <div>{roundValue(borrowData.usedLimit, 4)}%</div>
+                          <div>{roundValue(borrowData.usedLimit, 2)}%</div>
                         </div>
                         <div className='mt-6 mb-14 mx-9'>
                           <button
@@ -1277,9 +1571,10 @@ export default function Content() {
                             type='button'
                             onClick={async () => {
                               if (wallet.connected) {
-                                await repay(amount4);
-                                setAmount4(0);
-                                setBorrowOpen(false);
+                                await repay(amount4)
+                                await loadLending(reRender, wallet.publicKey)
+                                setAmount4(0)
+                                setBorrowOpen(false)
                               }
                             }}>
                             Repay
